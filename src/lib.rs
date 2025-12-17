@@ -48,6 +48,11 @@ impl PyTopicOptions {
             partitions,
         }
     }
+
+    fn __repr__(&self) -> String {
+        format!("<TopicOptions max_messages={:?} ttl={:?} lru={} partitions={:?}>", 
+            self.max_messages, self.message_ttl_ms, self.lru_enabled, self.partitions)
+    }
 }
 
 impl From<PyTopicOptions> for TopicOptions {
@@ -447,6 +452,16 @@ impl PyPublisher {
             }
         })
     }
+
+    #[pyo3(signature = (data, key=None))]
+    /// Alias for publish.
+    fn send<'py>(&self, py: Python<'py>, data: Bound<'py, PyAny>, key: Option<String>) -> PyResult<Bound<'py, PyAny>> {
+        self.publish(py, data, key)
+    }
+
+    fn __repr__(&self) -> String {
+        format!("<Publisher topic='{}'>", self.inner.topic())
+    }
 }
 
 #[pyclass(name = "Subscriber")]
@@ -457,6 +472,31 @@ struct PySubscriber {
 
 #[pymethods]
 impl PySubscriber {
+    fn __aiter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __anext__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let sub = self.inner.clone();
+        future_into_py(py, async move {
+            match sub.recv().await {
+                Ok(msg) => {
+                    let value: Value = msg.deserialize().map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+                    Python::with_gil(|py| {
+                        let bound = pythonize(py, &value)?;
+                        Ok(bound.unbind())
+                    })
+                },
+                Err(e) => Err(PyErr::new::<pyo3::exceptions::PyStopAsyncIteration, _>(e.to_string()))
+            }
+        })
+    }
+
+    fn __repr__(&self) -> String {
+        let cid = self.inner.consumer_id.as_deref().unwrap_or("None");
+        format!("<Subscriber topic='{}' consumer_id='{}'>", self.inner.topic_name, cid)
+    }
+
     /// Receive the next message.
     ///
     /// Returns:
@@ -518,6 +558,18 @@ impl PySubscriber {
             sub.reset_offset().await;
             Ok(())
         })
+    }
+
+    #[getter]
+    /// Get the consumer ID (if part of a consumer group).
+    fn consumer_id(&self) -> Option<String> {
+        self.inner.consumer_id.clone()
+    }
+
+    #[getter]
+    /// Get the topic name.
+    fn topic(&self) -> String {
+        self.inner.topic_name.clone()
     }
 }
 
