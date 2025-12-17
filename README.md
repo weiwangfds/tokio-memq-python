@@ -1,6 +1,19 @@
 # tokio-memq-python
 
-Python bindings for [tokio-memq](https://crates.io/crates/tokio-memq).
+[![PyPI version](https://badge.fury.io/py/tokio-memq-python.svg)](https://badge.fury.io/py/tokio-memq-python)
+[![Build Status](https://github.com/weiwangfds/tokio-memq-python/actions/workflows/CI.yml/badge.svg)](https://github.com/weiwangfds/tokio-memq-python/actions)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python Version](https://img.shields.io/pypi/pyversions/tokio-memq-python.svg)](https://pypi.org/project/tokio-memq-python/)
+
+High-performance, asynchronous, in-memory message queue bindings for Python, powered by Rust's `tokio` and `tokio-memq`.
+
+## Features
+
+*   **High Performance**: Built on Rust's Tokio runtime for ultra-low latency and high throughput.
+*   **Async/Await Support**: Fully integrated with Python's `asyncio`.
+*   **Partition Support**: Built-in support for partitioned topics (RoundRobin, Hash, Random, Fixed routing).
+*   **Type Safety**: Leverages Rust's safety guarantees under the hood.
+*   **Cross-Platform**: Pre-compiled wheels for Linux, Windows, and macOS (Intel & Apple Silicon).
 
 ## Installation
 
@@ -8,25 +21,34 @@ Python bindings for [tokio-memq](https://crates.io/crates/tokio-memq).
 pip install tokio-memq-python
 ```
 
+Requires Python 3.8 or later.
+
 ## Usage
 
 ### Basic Usage
 
+Simple publish-subscribe pattern using default topic settings.
+
 ```python
 import asyncio
-from tokio_memq import MessageQueue, TopicOptions
+from tokio_memq import MessageQueue
 
 async def main():
+    # Initialize the Message Queue
     mq = MessageQueue()
+    
+    # Create a publisher for "test_topic"
     publisher = mq.publisher("test_topic")
     
-    # Publish
-    await publisher.publish({"key": "value"})
-    
-    # Subscribe
+    # Create a subscriber
     subscriber = await mq.subscriber("test_topic")
+    
+    # Publish a message (can be any JSON-serializable object)
+    await publisher.publish({"id": 1, "content": "Hello World"})
+    
+    # Receive the message
     msg = await subscriber.recv()
-    print(msg)
+    print(f"Received: {msg}")
 
 if __name__ == "__main__":
     asyncio.run(main())
@@ -34,7 +56,7 @@ if __name__ == "__main__":
 
 ### Partitioned Topics
 
-You can create topics with multiple partitions to scale consumption and manage data distribution.
+Scale your application by distributing messages across multiple partitions.
 
 ```python
 import asyncio
@@ -42,60 +64,76 @@ from tokio_memq import MessageQueue
 
 async def main():
     mq = MessageQueue()
-    topic = "partitioned_topic"
+    topic = "user_events"
     
-    # Create a topic with 3 partitions
-    await mq.create_partitioned_topic(topic, 3)
+    # 1. Create a topic with 4 partitions
+    #    This allows parallel consumption by up to 4 consumers
+    await mq.create_partitioned_topic(topic, partition_count=4)
     
-    # Set routing strategy (optional, default is RoundRobin)
-    # Available strategies: "RoundRobin", "Random", "Hash", "Fixed"
-    
-    # Example 1: Round Robin (default) - distributes messages evenly
-    await mq.set_partition_routing(topic, "RoundRobin")
-    
-    # Example 2: Hash routing - ensures messages with same key go to same partition
-    # Use "message" to use the message key provided during publish
+    # 2. Configure Hash routing
+    #    "Hash" strategy ensures messages with the same key go to the same partition.
+    #    key="message" tells the router to use the key provided in publish().
     await mq.set_partition_routing(topic, "Hash", key="message")
     
-    # Create publisher
+    # 3. Publish messages with keys
     pub = mq.publisher(topic)
     
-    # Publish with key for Hash routing
-    # All messages with key="user1" will go to the same partition
-    await pub.publish({"user": "user1", "data": "A"}, key="user1")
-    await pub.publish({"user": "user1", "data": "B"}, key="user1")
+    # User A's events will always go to the same partition (e.g., Partition 1)
+    await pub.publish({"event": "login"}, key="user_A")
+    await pub.publish({"event": "click"}, key="user_A")
     
-    # Subscribe to a specific partition (e.g., partition 0)
-    sub0 = await mq.subscribe_partition(topic, 0)
+    # User B's events will go to a different partition (e.g., Partition 3)
+    await pub.publish({"event": "login"}, key="user_B")
     
-    # Receive messages
-    while True:
-        msg = await sub0.recv()
-        print(f"Received from P0: {msg}")
+    # 4. Subscribe to a specific partition
+    #    In a real app, you would distribute these partition IDs across different workers
+    sub_p1 = await mq.subscribe_partition(topic, 1) # Listening for User A
+    
+    msg = await sub_p1.recv()
+    print(f"Worker for Partition 1 received: {msg}")
 
 if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-### API Reference
+## API Reference
 
-#### MessageQueue
+### `MessageQueue`
 
-- `publisher(topic)`: Get a publisher for a topic.
-- `subscriber(topic)`: Subscribe to a topic (auto-creates if not exists).
-- `subscriber_with_options(topic, options)`: Subscribe with custom options.
-- `create_partitioned_topic(topic, partition_count, options=None)`: Create a partitioned topic.
-- `set_partition_routing(topic, strategy, key=None, fixed_id=None)`: Set routing strategy.
-- `subscribe_partition(topic, partition_id)`: Subscribe to a specific partition.
-- `get_partition_stats(topic, partition_id)`: Get stats for a partition.
-- `list_partitioned_topics()`: List all partitioned topics.
-- `delete_partitioned_topic(topic)`: Delete a partitioned topic.
+The main entry point for interacting with the queue.
 
-#### Publisher
+*   `publisher(topic: str) -> Publisher`: Get a publisher instance for a topic.
+*   `subscriber(topic: str) -> Subscriber`: Subscribe to a standard topic.
+*   `create_partitioned_topic(topic: str, partition_count: int, options: TopicOptions = None)`: Create a topic with multiple partitions.
+*   `set_partition_routing(topic: str, strategy: str, key: str = None, fixed_id: int = None)`: Configure routing strategy.
+    *   `strategy`: "RoundRobin", "Random", "Hash", "Fixed".
+*   `subscribe_partition(topic: str, partition_id: int) -> Subscriber`: Subscribe to a specific partition.
+*   `list_partitioned_topics() -> List[str]`: Get all partitioned topics.
+*   `delete_partitioned_topic(topic: str)`: Remove a topic and its partitions.
 
-- `publish(data, key=None)`: Publish a message (dict/object). `key` is used for Hash routing.
+### `Publisher`
 
-#### Subscriber
+*   `publish(data: Any, key: str = None)`: Asynchronously publish data.
+    *   `data`: Any Python object serializable to JSON (dict, list, str, int, etc.).
+    *   `key`: Optional string key, required only for "Hash" routing on partitioned topics.
 
-- `recv()`: Receive next message (async).
-- `try_recv()`: Try to receive (non-blocking).
+### `Subscriber`
+
+*   `recv() -> Any`: Asynchronously wait for and return the next message.
+
+### `TopicOptions`
+
+Configuration object for topic creation.
+
+```python
+from tokio_memq import TopicOptions
+
+opts = TopicOptions()
+opts.max_messages = 1000      # Max queue depth per partition
+opts.message_ttl_ms = 60000   # Message time-to-live in ms
+opts.lru_enabled = True       # Evict oldest when full
+```
+
+## License
+
+This project is licensed under the MIT License.
